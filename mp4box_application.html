@@ -1,0 +1,245 @@
+<html>
+<h1> Video Test App</h1>
+<head>
+  <meta charset="utf-8">
+  <title>MP4Box.js in the browser</title>
+<script src="mp4box.all.js" type="text/javascript">
+</script>
+<script src = "browser-buffer.js" type="text/javascript">
+</script>
+</head>
+<body>
+<script>
+
+var	mp4box = new MP4Box(false);
+var mediaSource  = new MediaSource;
+var videotracks = new Array;
+var audiotracks = new Array;
+var texttracks = new Array;
+var tracks;
+var timer;
+var userBuffer = new Array;
+
+function initialize() {
+}
+
+mp4box.onSegment = function (id, user, buffer,sampleNum) {
+	console.log('onSegment id: '+ id +'sampleNum: ' + sampleNum);
+	var srcbuffers = user.mediasource.sourceBuffers;
+	user.segmentbuff.push({buffer:buffer,id:id,sampleNum:sampleNum});
+	if(sampleNum === user.nb_samples) {
+		console.log('Pushing to user buffer');
+		userBuffer.push(user);
+	}
+}
+
+function addToSourceBuffers() {
+	var srcbuffers = mediaSource.sourceBuffers;
+	if(srcbuffers.length !== 0) {
+
+		for(var i = 0; i < userBuffer.length; i++)
+		{
+			var user = userBuffer[i];
+			if(user !== undefined && user.index !== undefined) {
+				if(!srcbuffers[user.index].updating) {
+					var sample = user.segmentbuff.shift();
+					if(sample !== undefined) {
+						if(sample.buffer !== undefined) {
+							srcbuffers[user.index].appendBuffer(sample.buffer);
+							if(srcbuffers[user.index].sampleNum == undefined) {
+								srcbuffers[user.index].sampleNum = 0;
+							}
+							console.info('addToSourceBuffers user index : '+user.index+' sample.sampleNum: '+sample.sampleNum);
+							srcbuffers[user.index].sampleNum +=  sample.sampleNum;
+							mp4box.releaseUsedSamples(sample.id, sample.sampleNum);
+						} else {
+							srcbuffers[user.index].appendBuffer(sample);
+						}
+					}
+				}
+			}
+		}
+	}
+	timer = setTimeout(addToSourceBuffers,200);
+}
+mp4box.onError = function(e) {
+	console.log('mp4box error: '+e);
+};
+
+mp4box.onReady = function(info) {
+	var context = this;
+	console.log('info');
+	console.log(info);
+
+
+	tracks = info.tracks;
+	for(var i = 0; i < tracks.length; i++)
+	{
+		tracks[i].status = 'ready';
+	}
+	processTracks();
+};
+
+function processTracks()
+{
+	for(var i = 0; i < tracks.length; i++) {
+		switch(tracks[i].type)
+		{
+			case 'audio':
+			case 'video':
+				initializeMediaSourceBuffers(tracks,i,tracks[i].type);
+				console.log('nb_samples : '+tracks[i].nb_samples);
+				segmentMediaTracks(tracks,i);
+				break;
+			case 'metadata':
+			case 'subtitles':
+				extractTextTracks(tracks,i);
+				break;
+			default:
+				break;
+		}
+		tracks[i].status = 'started';
+	}
+	mp4box.start();
+	addToSourceBuffers();
+}
+
+mp4box.onMoovStart=function(){
+	console.log('onMoovStart');
+}
+
+function segmentMediaTracks(tracks,index)
+{
+	var sb;
+	var options =  { nbSamples: 1000 };
+	var msdata = {segmentbuff: new Array, mediasource: mediaSource, firstappend: 0,index:index,nb_samples:tracks[index].nb_samples};
+	tracks[index].status = 'inprogress';
+	mp4box.setSegmentOptions(tracks[index].id, msdata, options);  
+
+	var initSegs = mp4box.initializeSegmentation();
+	for (var i = 0; i < initSegs.length; i++) {
+		if(initSegs[i].user !== undefined)
+			if(initSegs[i].user.index === msdata.index) {
+					sb = initSegs[i].user;
+					sb.segmentbuff.push(initSegs[i].buffer);
+					break;
+			}
+	}
+}
+
+function initializeMediaSourceBuffers(tracks,index,type)
+{
+	mediaSource.addEventListener('sourceopen',
+								function(_) {
+								sourceOpen(_,mediaSource,tracks,index,type);
+							});
+
+
+	if(type === "audio") {
+		var audioElement = document.createElement("audio");
+		audioElement.src = URL.createObjectURL(mediaSource);
+		audioElement.id = 'audio' + index;
+		audiotracks.push(audioElement);
+	} else if(type === "video") {
+		var videoElement = document.createElement("video");
+		videoElement.src = URL.createObjectURL(mediaSource);
+		videoElement.id = 'video' + index;
+		videotracks.push(videoElement);
+	}
+}
+
+function sourceOpen (_,ms,tracks,index,type) {
+	console.log('sourceOpen rs: '+ms.readyState);
+	checkSupportedTypes(ms,tracks,index,type);
+}
+
+function checkSupportedTypes(ms,tracks,index,type)
+{
+	console.log('checkSupportedTypes id: '+tracks[index].id);
+	var mimeCodec;
+	if(type === "audio") {
+		mimeCodec = 'audio/mp4;codecs="';
+	} else if(type === "video") {
+		mimeCodec = 'video/mp4;codecs="';
+	}
+	mimeCodec += tracks[index].codec+'"';
+	if ('MediaSource' in window && MediaSource.isTypeSupported(mimeCodec)) {
+		console.log('MimeType supported : ' + mimeCodec);
+	    var sourceBuffer = ms.addSourceBuffer(mimeCodec);
+	    ms.sourceBuffers[ms.sourceBuffers.length - 1].index = index;
+	}
+	 else {
+	  console.error('Unsupported MIME type or codec: ', mimeCodec);
+	}
+}
+
+function extractTextTracks (tracks,index) {
+	console.log('Text track index: '+index + ' id: '+tracks[index].id);
+	var video = document.getElementById('videotest');
+	var textTrack =video.addTextTrack("captions",tracks[index].name,tracks[index].language);
+
+	textTrack.mode = "showing";
+	var options = { nbSamples: 1000 };
+	mp4box.onSamples = function (id, user, samples) {
+	console.log('onSamples id: '+ id);
+		for(var i = 0; i < samples.length; i++) {
+			var new_cue;
+			var string = new TextDecoder("utf-8").decode(samples[i].data);
+			var start = samples[i].cts/samples[i].timescale;
+			var end = (samples[i].cts + samples[i].duration) / samples[i].timescale;
+			new_cue = new VTTCue(start,end,string);
+			textTrack.addCue(new_cue);
+
+		}
+	}
+  mp4box.setExtractionOptions(tracks[index].id, textTrack, options);  
+}
+
+function fileParse (file) {
+	var fileSize = file.size;
+	var chunkSize = 1024*1024;
+	var no_of_chunks = 0;
+	var _offset = 0;
+
+	var onBlockRead = function(event)
+	{
+		var contents = event.target.result;
+		var contentLength = event.target.result.byteLength;
+		contents.fileStart = _offset;
+		mp4box.appendBuffer(contents);
+		if(_offset >= fileSize) {
+			console.log('Done reading file');
+			// mp4box.start();
+		} else {
+			_offset += contentLength;
+			no_of_chunks++;
+			if(fileSize > (no_of_chunks*chunkSize)) {
+				readBlock(_offset,chunkSize,file);
+			} else {
+				readBlock(_offset,(fileSize - (no_of_chunks*chunkSize)),file);
+			}
+		}
+	};
+
+	function readBlock (offset,length,file) {
+		var reader = new FileReader();
+		var blob = file.slice(offset,length+offset);
+		reader.onload = onBlockRead;
+		reader.readAsArrayBuffer(blob);
+	};
+	readBlock(_offset,chunkSize,file);	
+};
+
+
+function getFile() {
+
+	var file = document.getElementById('fileinput').files[0];
+	initialize();
+	fileParse(file,mp4box);
+}
+
+</script>
+<video id = 'videotest'></video>
+	<input type="file" id="fileinput" onchange="getFile()">
+</body>
+</html>

@@ -1,5 +1,6 @@
 # mp4box-sw
 # Taken from https://github.com/gpac/mp4box.js
+# License applies same as mp4box-sw given in https://github.com/gpac/mp4box.js
 Service Worker for MP4 files
 
 This project shows the use of [MP4Box.js](https://github.com/gpac/mp4box.js) as a Service Worker.
